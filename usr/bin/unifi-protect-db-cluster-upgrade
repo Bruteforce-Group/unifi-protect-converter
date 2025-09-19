@@ -1,0 +1,365 @@
+#!/bin/sh
+
+set -e
+
+USER=postgres
+GROUP=postgres
+PORT=5433
+
+PG_CLUSTER_NAME=protect
+
+OLD_PG_VERSION=9.6
+PG_VERSION=14
+
+OLD_PG_CLUSTER_ENV=/etc/postgresql/$OLD_PG_VERSION/$PG_CLUSTER_NAME
+PG_CLUSTER_ENV=/etc/postgresql/$PG_VERSION/$PG_CLUSTER_NAME
+
+OLD_BIN_DIR=/usr/lib/postgresql/$OLD_PG_VERSION/bin
+BIN_DIR=/usr/lib/postgresql/$PG_VERSION/bin
+
+INTERNAL_ROOT=/data
+EXTERNAL_ROOT=/srv
+
+INTERNAL_VIDEO_DIR=/data/unifi-protect/video
+EXTERNAL_VIDEO_DIR=/srv/unifi-protect/video
+
+EXTERNAL_MINIMUM_SPACE=54683238 # kibibyte = 52.15 GiB = 56 GB
+
+LOG_FILE="/var/log/postgresql/postgresql-$PG_VERSION-$PG_CLUSTER_NAME-upgrade.log"
+
+print_log() {
+  local msg="$1"
+  local logFile=${2:-"$LOG_FILE"}
+
+  echo "[$(date -u +'%F %T %z')] - unifi-protect-db-cluster-upgrade - $msg" >> $logFile || true
+}
+
+is_link() {
+  [ -L "$1" ] && [ -e "$1" ] && return
+  false
+}
+
+get_disk_space() {
+  df "$1" -k | tail -n 1 | awk '{printf $2}'
+}
+
+INTERNAL_DB_ROOT=/data/postgresql
+EXTERNAL_DB_ROOT=/srv/postgresql
+
+has_internal_ssd() {
+  is_link $INTERNAL_DB_ROOT || is_link $INTERNAL_ROOT || mountpoint -q /ssd1
+}
+
+has_external_storage() {
+  (mountpoint -q /srv || is_link /srv) && [ $(get_disk_space /srv) -ge $EXTERNAL_MINIMUM_SPACE ]
+}
+
+old_db_available() {
+  [ -f $OLD_CONFIGURED ] && [ -d $OLD_DB_DATADIR ] && [ -d $OLD_DB_CONFDIR ]
+}
+
+clean_upgrade_destination() {
+  if [ -d $NEW_DB_DIR ]; then
+    print_log "Cleaning upgrade destination after a failed upgrade attempt."
+    rm -rf $NEW_DB_DIR
+  fi
+  rm -rf $PG_CLUSTER_ENV
+}
+
+init_cluster() {
+  print_log "Creating a new cluster"
+  pg_createcluster --locale=C --encoding=UTF8 -d $NEW_DB_DATADIR -p $PORT $PG_VERSION $PG_CLUSTER_NAME -- --auth=trust --auth-local=trust >> $LOG_FILE 2>&1
+
+  print_log "Copying configuration"
+  cp -a $PG_CLUSTER_ENV $NEW_DB_DIR/.conf
+  mv $NEW_DB_DIR/.conf $NEW_DB_CONFDIR
+  rm -rf $PG_CLUSTER_ENV
+  ln -snf $NEW_DB_CONFDIR $PG_CLUSTER_ENV
+}
+
+remove_old_services() {
+  print_log "Removing old services"
+
+  rm -f /etc/systemd/system/postgresql-cluster@9.6-protect-cleanup.service \
+        /lib/systemd/system/postgresql-cluster-9.6-protect-cleanup.service
+
+  rm -f /etc/systemd/system/postgresql-cluster@9.6-protect-migrate.service \
+        /lib/systemd/system/postgresql-cluster-9.6-protect-migrate.service
+
+  systemctl disable postgresql-cluster@9.6-protect.service --now >> $LOG_FILE 2>&1 || true
+  rm -rf /etc/systemd/system/postgresql-cluster@9.6-protect.service.d \
+         /lib/systemd/system/postgresql-cluster@9.6-protect.service.d
+  rm -rf /etc/systemd/system/postgresql.service.wants/postgresql-cluster@9.6-protect.service
+
+  systemctl disable postgresql@9.6-protect.service --now >> $LOG_FILE 2>&1 || true
+  rm -rf /etc/systemd/system/postgresql@9.6-protect.service.d \
+         /lib/systemd/system/postgresql@9.6-protect.service.d
+  rm -rf /etc/systemd/system/multi-user.target.wants/postgresql@9.6-protect.service
+
+  systemctl reset-failed \
+    postgresql-cluster@9.6-protect.service \
+    postgresql@9.6-protect.service \
+    postgresql-cluster@9.6-protect-cleanup.service \
+    postgresql-cluster-9.6-protect-cleanup.service \
+    postgresql-cluster@9.6-protect-migrate.service \
+    postgresql-cluster-9.6-protect-migrate.service \
+    >> $LOG_FILE 2>&1 || true
+
+  systemctl --system daemon-reload >> $LOG_FILE 2>&1 || true
+}
+
+make_sure_free_space_enough_for_upgrade () {
+  if [ -f $OLD_DB_TMP_COPYING ] || [ -f $OLD_DB_TMP_REMOVING ] || [ -f $OLD_DB_TMP_LINKED ]; then
+    print_log "Free up disk before... previous operation been interruped somehow..."
+    print_log "Prevent duplicated to free space, causing lost more recordings..."
+    ls -Alh $EXTERNAL_ROOT/ >> $LOG_FILE 2>&1
+    return
+  fi
+
+  print_log "Checking free space on device"
+
+  print_log "Database space usage before postgresql upgrade"
+  print_log "du -sh $OLD_DB_DIR"
+  du -sh $OLD_DB_DIR >> $LOG_FILE 2>&1
+
+  print_log "Free space left before postgresql upgrade"
+  print_log "df -h $NEW_DB_DIR"
+  df -k $NEW_DB_DIR >> $LOG_FILE 2>&1
+
+  local old_db_size=$(du -s $OLD_DB_DIR |awk '{print $1}')
+  local free_size=$(df -k $NEW_DB_DIR |tail -n 1 |awk '{print $4}')
+  local GB=1048576
+  local min_free_size=$(($old_db_size + 1 * $GB)) # 1GB extra buffer space
+
+  if [ $free_size -gt $min_free_size ]; then
+    print_log "Free space on device is enough for postgresql upgrade"
+    return
+  fi
+
+  print_log "Not enough free space on device for postgresql upgrade"
+
+  local purge_count=$((($min_free_size - $free_size) / $GB + 1)) # round up
+
+  print_log "free space: $free_size KB, required: $min_free_size KB"
+  print_log "difference: $(($min_free_size - $free_size)) KB, purge_count: $purge_count"
+
+  local video_dir
+  local pool_count
+
+  if has_external_storage; then
+    video_dir=$EXTERNAL_VIDEO_DIR
+    pool_count=$(ls -1 $video_dir/pool 2>/etc/null |wc -l)
+  else
+    video_dir=$INTERNAL_VIDEO_DIR
+    pool_count=$(ls -1 $video_dir/pool 2>/etc/null |wc -l)
+  fi
+
+  if [ $pool_count -gt $purge_count ]; then
+    local delete_count=$purge_count
+    print_log "Purging files ($delete_count) from video pool..."
+    find $video_dir/pool -type f -printf '%T+ %p\n' |sort -k1 |head -n $delete_count |awk '{print $2}' |xargs rm -f {}
+  else
+    print_log "Purging files ($pool_count) from video pool..."
+    rm -rf $video_dir/pool/*
+
+    local delete_count=$(($purge_count - $pool_count))
+    if [ $delete_count -gt "0" ]; then
+      print_log "Free space still not enough..."
+      print_log "Purging files ($delete_count) from video recordings..."
+      find $video_dir -type f -printf '%T+ %p\n' |grep '0_rotating' |sort -k1 |head -n $delete_count |awk '{print $2}' |xargs rm -f {}
+    fi
+  fi
+
+  print_log "Free space left after purging oldest files..."
+  print_log "df -h $NEW_DB_DIR"
+  df -h $NEW_DB_DIR >> $LOG_FILE 2>&1
+}
+
+OLD_DB_TMP_COPYING=/srv/.old_protect_db_tmp_copying
+OLD_DB_TMP_REMOVING=/srv/.old_protect_db_tmp_removing
+OLD_DB_TMP_LINKED=/srv/.old_protect_db_tmp_linked
+
+copy_old_db_to_external(){
+  local external_tmp_db_dir=$(echo $OLD_DB_DIR |sed -e "s/\/data\//\/srv\//")
+
+  if [ ! -d $external_tmp_db_dir ]; then
+    mkdir -p $external_tmp_db_dir
+    chown $USER:$GROUP $external_tmp_db_dir
+  fi
+
+  print_log "Copying/Syncing ($OLD_DB_DIR) to the external storage ($external_tmp_db_dir)"
+
+  touch $OLD_DB_TMP_COPYING
+  rsync -a $OLD_DB_DIR/ $external_tmp_db_dir/
+}
+
+remove_old_db_from_internal_ssd(){
+  print_log "Removing old database ($OLD_DB_DIR) from internal SSD"
+
+  touch $OLD_DB_TMP_REMOVING
+  rm -rf $OLD_DB_DIR
+}
+
+link_old_internal_db_to_external(){
+  local external_tmp_db_dir=$(echo $OLD_DB_DIR |sed -e "s/\/data\//\/srv\//")
+  # create a symlink to the external database, so the upgrade process can still find the old database
+  # no need to change the ENV postgresql config or link...
+  # will become something like,
+  # /etc/postgresql/{ver}/protect
+  #   -> /data/postgresql/{ver}/protect
+  #     -> /srv/postgresql/{ver}/protect
+  ln -snf $external_tmp_db_dir $OLD_DB_DIR
+  touch $OLD_DB_TMP_LINKED
+}
+
+make_sure_internal_ssd_has_enough_free_space(){
+  if ! has_internal_ssd; then
+    print_log "No internal ssd, no need to check internal ssd free space"
+    return
+  fi
+
+  if ! has_external_storage; then
+    print_log "No external storage, internal ssd should have enough free space"
+    return
+  fi
+
+  if [ -f $OLD_DB_TMP_LINKED ]; then
+    print_log "The old Protect database already moved to external storage"
+    return
+  fi
+
+  if [ -f $OLD_DB_TMP_REMOVING ]; then
+    print_log "The old Protect database is in removing from internal ssd"
+    remove_old_db_from_internal_ssd
+    link_old_internal_db_to_external
+    return
+  fi
+
+  if [ -f $OLD_DB_TMP_COPYING ]; then
+    print_log "The old Protect database is in copying/syncing to external storage"
+    copy_old_db_to_external
+    remove_old_db_from_internal_ssd
+    link_old_internal_db_to_external
+    return
+  fi
+
+  # check internal ssd free space
+  local old_db_size=$(du -s $OLD_DB_DIR |awk '{print $1}')
+  local free_size=$(df -k $NEW_DB_DIR |tail -n 1 |awk '{print $4}')
+  local GB=1048576
+  local min_free_size=$(($old_db_size + 1 * $GB)) # 1GB extra buffer space
+  if [ $free_size -gt $min_free_size ]; then
+    print_log "Free space on internal SSD is enough for postgresql upgrade"
+    return
+  fi
+
+  print_log "Not enough free space on internal SSD for postgresql upgrade"
+
+  copy_old_db_to_external
+  remove_old_db_from_internal_ssd
+  link_old_internal_db_to_external
+}
+
+perform_upgrade() {
+  print_log "Creating tmp directory"
+  local tmpDir=$NEW_DB_DIR/tmp
+  mkdir $tmpDir
+  chown $USER:$GROUP $tmpDir
+
+  # Upgrade process creates temporary files in current directory
+  cd $tmpDir
+
+  if ! is_link $OLD_PG_CLUSTER_ENV; then
+    print_log "PostgreSQL cluster Protect env link was missing or invalid... re-creating it"
+
+    # workaround for corrupted USB device
+    mkdir -p /etc/postgresql/$OLD_PG_VERSION
+    chown postgres:postgres /etc/postgresql/$OLD_PG_VERSION
+
+    print_log "ln -snf $OLD_DB_CONFDIR $OLD_PG_CLUSTER_ENV"
+    ln -snf $OLD_DB_CONFDIR $OLD_PG_CLUSTER_ENV
+
+    ls -Al /etc/postgresql/$OLD_PG_VERSION/ >> $LOG_FILE 2>&1 || true
+  fi
+
+  print_log "Make sure new & old clusters are stopped"
+  su - $USER -c "$OLD_BIN_DIR/pg_ctl stop -w -D $OLD_DB_DATADIR -m fast" >> $LOG_FILE 2>&1 || true
+  su - $USER -c "$BIN_DIR/pg_ctl stop -w -D $NEW_DB_DATADIR -m fast" >> $LOG_FILE 2>&1 || true
+
+  print_log "Make sure old cluster's stats_temp_directory exist..."
+  mkdir -m 2750 -p /var/run/postgresql/$OLD_PG_VERSION-$PG_CLUSTER_NAME.pg_stat_tmp >> $LOG_FILE 2>&1 || true
+  chown $USER:$GROUP /var/run/postgresql/$OLD_PG_VERSION-$PG_CLUSTER_NAME.pg_stat_tmp >> $LOG_FILE 2>&1 || true
+
+  print_log "Running upgrade"
+  # Upgrade cannot be run as 'root'
+  su - $USER -c "$BIN_DIR/pg_upgrade \
+    -p 15433 \
+    -P 25433 \
+    -b $OLD_BIN_DIR \
+    -B $BIN_DIR \
+    -d $OLD_DB_CONFDIR \
+    -D $NEW_DB_CONFDIR \
+  " >> $LOG_FILE 2>&1
+
+  print_log "Removing tmp directory"
+  rm -rf $tmpDir
+}
+
+if has_internal_ssd; then
+  # The database is always located at internal storage if the build-in SSD exists.
+  DB_ROOT=$INTERNAL_DB_ROOT
+elif has_external_storage; then
+  DB_ROOT=$EXTERNAL_DB_ROOT
+else
+  DB_ROOT=$INTERNAL_DB_ROOT
+fi
+
+OLD_DB_DIR=$DB_ROOT/$OLD_PG_VERSION/$PG_CLUSTER_NAME
+OLD_DB_DATADIR=$OLD_DB_DIR/data
+OLD_DB_CONFDIR=$OLD_DB_DIR/conf
+OLD_CONFIGURED=$OLD_DB_DIR/.configured
+
+NEW_DB_DIR=$DB_ROOT/$PG_VERSION/$PG_CLUSTER_NAME
+NEW_DB_DATADIR=$NEW_DB_DIR/data
+NEW_DB_CONFDIR=$NEW_DB_DIR/conf
+CONFIGURED=$NEW_DB_DIR/.configured
+
+if has_external_storage; then
+  if [ -f $CONFIGURED ]; then
+    # PG already upgraded & migrated to external storage
+    exit 0
+  fi
+
+  if [ -f "$INTERNAL_DB_ROOT/$PG_VERSION/$PG_CLUSTER_NAME/.configured" ]; then
+    if [ "$PG_VERSION" = "$(cat $INTERNAL_DB_ROOT/$PG_VERSION/$PG_CLUSTER_NAME/data/PG_VERSION 2>/dev/null || true)" ]; then
+      # PG already upgraded, but not migrated to external storage yet.
+      # The next pg-cluster-{PG_VERSION}-protect-migrate.service
+      # will continue to migrate data from internal to external storage if needed.
+      exit 0
+    fi
+  fi
+fi
+
+if [ ! -f $CONFIGURED ]; then
+  remove_old_services
+  clean_upgrade_destination
+  init_cluster
+
+  if old_db_available; then
+    make_sure_free_space_enough_for_upgrade
+    make_sure_internal_ssd_has_enough_free_space
+    perform_upgrade
+
+    # Success
+    touch $CONFIGURED
+
+    # need to cleanup old temparary db early, once Protect started, would purge too many recordings...
+    if [ -f $OLD_DB_TMP_LINKED ]; then
+      local external_tmp_db_dir=$(echo $OLD_DB_DIR |sed -e "s/\/data\//\/srv\//")
+      rm -rf $external_tmp_db_dir
+    fi
+  fi
+
+  # Success
+  touch $CONFIGURED
+fi

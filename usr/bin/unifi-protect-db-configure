@@ -1,0 +1,147 @@
+#!/bin/sh
+
+OS_SYSID=$( ubnt-tools id | grep 'board.sysid' | awk -F'=' '{print $2}' )
+
+PG_VERSION=14
+PG_CLUSTER_NAME=protect
+LOG_FILE="/var/log/postgresql/postgresql-$PG_VERSION-$PG_CLUSTER_NAME-dev.log"
+
+TOTAL_MEM_KB=$(grep MemTotal /proc/meminfo | awk '{print $2}')
+TOTAL_MEM_MB=$((TOTAL_MEM_KB / 1024))
+
+CPU_CORES=$(grep -c processor /proc/cpuinfo)
+
+IS_NVR_SERIES=$(echo "$OS_SYSID" | grep -E '0xea16|0xea1a|0xea20|0xea3f')
+IS_UCKP=$(echo "$OS_SYSID" | grep -E '0xe970')
+IS_ENVR_UDMP_MAX=$(echo "$OS_SYSID" | grep -E '0xea3f|0xea32')
+
+DEFAULT_SHARED_BUFFERS="128MB"
+DEFAULT_WORK_MEM="4MB"
+DEFAULT_MAINTENANCE_WORK_MEM="64MB"
+DEFAULT_MAX_WAL_SIZE="1GB"
+DEFAULT_MIN_WAL_SIZE="80MB"
+
+PG_LOG_MIN_DURATION=5000  # Set how long a statement must run for before being logged. (Default: -1)
+                          # Pros: Helps in identifying long-running queries.
+                          # Cons: Might miss shorter, yet inefficient queries.
+
+SHARED_BUFFERS=$([ -n "$IS_NVR_SERIES" ] && echo "$((TOTAL_MEM_MB / 8))MB" || echo "$DEFAULT_SHARED_BUFFERS")  # Set the amount of memory the database server uses for shared memory buffers. (Default: 128MB)
+                                                                                                               # Pros: Improves performance by reducing disk I/O.
+                                                                                                               # Cons: Too high a value can starve other processes of memory.
+
+# Set the amount of memory used by internal sort operations and hash tables before switching to temporary disk files. (Default: 4MB)
+# Pros: Speeds up query processing by keeping more data in memory.
+# Cons: Can lead to excessive memory use if not properly configured.
+if [ -n "$IS_UCKP" ]; then
+  WORK_MEM="12MB"
+elif [ -n "$IS_NVR_SERIES" ]; then
+  WORK_MEM="$((TOTAL_MEM_MB / 128))MB"
+else
+  WORK_MEM="$DEFAULT_WORK_MEM"
+fi
+
+MAINTENANCE_WORK_MEM=$([ -n "$IS_NVR_SERIES" ] && echo "$((TOTAL_MEM_MB / 32))MB" || echo "$DEFAULT_MAINTENANCE_WORK_MEM")  # Set the maximum amount of memory used for maintenance operations. (Default: 64MB)
+                                                                                                                            # Pros: Speeds up maintenance tasks like vacuuming and index creation.
+                                                                                                                            # Cons: High values can impact system performance during maintenance.
+
+MAX_PARALLEL_WORKERS_PER_GATHER=$((CPU_CORES / 2 ? CPU_CORES / 2 : 1))  # Set the maximum number of workers that can be started by a single gather node. (Default: 2)
+                                                                        # Pros: Can improve the performance of parallel queries.
+                                                                        # Cons: Excessive parallelism can lead to contention and diminish returns.
+
+# Set the total number of worker processes allowed across the system. (Default: 8)
+# Pros: Increases the ability to handle concurrent processes.
+# Cons: High numbers can lead to increased system load and resource contention.
+if [ -n "$IS_UCKP" ]; then # Since HDD-UCKP has an 8-core processor but only a 5400RPM disk and 3GB of RAM, with a limitation of throttling, this unique configuration is designed to reduce I/O loading.
+  MAX_WORKER_PROCESSES=4
+else
+  MAX_WORKER_PROCESSES=$CPU_CORES
+fi
+
+EFFECTIVE_CACHE_SIZE=$((TOTAL_MEM_MB / 2))MB  # Set the estimated size of the cache that the planner should assume is available. (Default: 4GB)
+                                              # Pros: Helps the planner optimize queries assuming more data can stay in cache.
+                                              # Cons: Overestimation can lead to plans that perform poorly under actual memory constraints.
+
+TRACK_COUNTS=on  # Enable or disable the tracking of row insertions, updates, and deletions. (Default: on)
+                 # Pros: Provides useful statistics for the optimizer.
+                 # Cons: Can add slight overhead to data modification operations.
+
+AUTOVACUUM=on  # Enable or disable the autovacuum process. (Default: on)
+               # Pros: Automates vacuuming tasks to avoid table bloat and reclaim space.
+               # Cons: Can lead to unpredictable system load spikes.
+
+# Set the maximum number of autovacuum workers. (Default: 3)
+# Pros: Allows more tables to be vacuumed in parallel.
+# Cons: Each worker consumes system resources, potentially affecting performance.
+if [ -n "$IS_UCKP" ]; then # Since HDD-UCKP has an 8-core processor but only a 5400RPM disk and 3GB of RAM, with a limitation of throttling, this unique configuration is designed to reduce I/O loading.
+  AUTOVACUUM_MAX_WORKERS=2
+else
+  AUTOVACUUM_MAX_WORKERS=$((CPU_CORES / 2 ? CPU_CORES / 2 : 1))
+fi
+
+if [ -n "$IS_ENVR_UDMP_MAX" ]; then
+  # More aggressive vacuum settings on ENVR and UDM Pro Max.
+  # This is necessary to ensure we're not running out of space on the internal SSD.
+  AUTOVACUUM_VACUUM_COST_LIMIT=2000
+  AUTOVACUUM_VACUUM_COST_DELAY=1
+else
+  # Default vacuum settings on other consoles
+  AUTOVACUUM_VACUUM_COST_LIMIT=200
+  AUTOVACUUM_VACUUM_COST_DELAY=2
+fi
+
+AUTOVACUUM_NAPTIME=10  # Set the minimum delay between autovacuum runs. (Default: 60)
+                       # Pros: Reduces the load on the system by spacing out vacuum operations.
+                       # Cons: Can delay cleanup and potentially lead to increased table bloat if set too high.
+
+AUTOVACUUM_VACUUM_SCALE_FACTOR=0.2  # Set the fraction of table size that must be modified before an autovacuum is triggered. (Default: 0.2)
+                                    # Pros: Prevents table bloat by vacuuming tables more frequently.
+                                    # Cons: Too aggressive settings can cause excessive vacuuming, increasing system load.
+
+AUTOVACUUM_ANALYZE_SCALE_FACTOR=0.1  # Set the fraction of table size that must be modified before an auto-analyze is triggered. (Default: 0.1)
+                                     # Pros: Keeps statistics up to date, leading to better query plans.
+                                     # Cons: Can increase load due to more frequent analysis.
+
+MAX_WAL_SIZE=$([ -n "$IS_NVR_SERIES" ] && echo "3GB" || echo "$DEFAULT_MAX_WAL_SIZE")  # Set the maximum size of the WAL file. (Default: 1GB)
+                                                                                       # Pros: Ensures enough WAL space to handle peaks in workload.
+                                                                                       # Cons: Using too much space can delay checkpoints and increase recovery time.
+
+MIN_WAL_SIZE=$([ -n "$IS_NVR_SERIES" ] && echo "512MB" || echo "$DEFAULT_MIN_WAL_SIZE")  # Set the minimum size of the WAL file. (Default: 80MB)
+                                                                                         # Pros: Prevents the system from trimming WAL too aggressively, which can help in recovery scenarios.
+                                                                                         # Cons: Consumes disk space unnecessarily if set too high.
+
+print_log() {
+  local msg="$1"
+  local logFile=${2:-"$LOG_FILE"}
+
+  echo "[$(date -u +'%F %T %z')] - unifi-protect-db-configure - $msg" >> $logFile || true
+}
+
+update_pg_config() {
+  local setting_name=$1
+  local setting_value=$2
+
+  print_log "Set ${setting_name} to ${setting_value}"
+  pg_conftool 14 protect set "${setting_name}" "${setting_value}"
+}
+
+print_log "Updating configuration..."
+
+update_pg_config "log_min_duration_statement" $PG_LOG_MIN_DURATION
+update_pg_config "shared_buffers" $SHARED_BUFFERS
+update_pg_config "work_mem" $WORK_MEM
+update_pg_config "maintenance_work_mem" $MAINTENANCE_WORK_MEM
+update_pg_config "max_parallel_workers_per_gather" $MAX_PARALLEL_WORKERS_PER_GATHER
+update_pg_config "max_worker_processes" $MAX_WORKER_PROCESSES
+update_pg_config "effective_cache_size" $EFFECTIVE_CACHE_SIZE
+update_pg_config "track_counts" $TRACK_COUNTS
+update_pg_config "autovacuum" $AUTOVACUUM
+update_pg_config "autovacuum_max_workers" $AUTOVACUUM_MAX_WORKERS
+update_pg_config "autovacuum_naptime" $AUTOVACUUM_NAPTIME
+update_pg_config "autovacuum_vacuum_scale_factor" $AUTOVACUUM_VACUUM_SCALE_FACTOR
+update_pg_config "autovacuum_analyze_scale_factor" $AUTOVACUUM_ANALYZE_SCALE_FACTOR
+update_pg_config "autovacuum_vacuum_cost_limit" $AUTOVACUUM_VACUUM_COST_LIMIT
+update_pg_config "autovacuum_vacuum_cost_delay" $AUTOVACUUM_VACUUM_COST_DELAY
+update_pg_config "max_wal_size" $MAX_WAL_SIZE
+update_pg_config "min_wal_size" $MIN_WAL_SIZE
+
+print_log "PostgreSQL configuration updated."

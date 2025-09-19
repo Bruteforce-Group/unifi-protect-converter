@@ -1,0 +1,83 @@
+#!/bin/sh
+
+set -e
+
+PG_VERSION=14
+PG_CLUSTER_NAME=protect
+
+INTERNAL_DB_ROOT=/data/postgresql
+INTERNAL_DB_DATADIR="$INTERNAL_DB_ROOT/$PG_VERSION/$PG_CLUSTER_NAME/data"
+INTERNAL_DB_CONFDIR="$INTERNAL_DB_ROOT/$PG_VERSION/$PG_CLUSTER_NAME/conf"
+
+EXTERNAL_DB_ROOT=/srv/postgresql
+EXTERNAL_DB_DATADIR="$EXTERNAL_DB_ROOT/$PG_VERSION/$PG_CLUSTER_NAME/data"
+EXTERNAL_DB_CONFDIR="$EXTERNAL_DB_ROOT/$PG_VERSION/$PG_CLUSTER_NAME/conf"
+
+EXTERNAL_MINIMUM_SPACE=54683238 # kibibyte = 52.15 GiB = 56 GB
+
+LOG_FILE="/var/log/postgresql/postgresql-$PG_VERSION-$PG_CLUSTER_NAME-migrate.log"
+
+print_log() {
+  local msg="$1"
+  local logFile=${2:-"$LOG_FILE"}
+
+  echo "[$(date -u +'%F %T %z')] - unifi-protect-db-cluster-migrate-setuppgconf - $msg" >> $logFile || true
+}
+
+is_link() {
+  [ -L "$1" ] && [ -e "$1" ] && return
+  false
+}
+
+get_disk_space() {
+  df "$1" -k | tail -n 1 | awk '{printf $2}'
+}
+
+show_data_dir() {
+  local data_dir="$(pg_conftool -s "$PG_VERSION" "$PG_CLUSTER_NAME" get data_directory 2>/dev/null)"
+  print_log ""$1" data_dir: $data_dir"
+}
+
+print_log "Script started. PG_VERSION=$PG_VERSION, PG_CLUSTER_NAME=$PG_CLUSTER_NAME"
+
+# Keep database in built-in SSD, no need for migration
+if is_link "$INTERNAL_DB_ROOT"; then
+  print_log "Early exit: Internal DB root ($INTERNAL_DB_ROOT) is a symbolic link."
+  exit 0
+elif mountpoint -q /ssd1; then
+  print_log "Early exit: /ssd1 is mounted."
+  exit 0
+fi
+
+# Determine available space on /srv
+available_space=$(get_disk_space /srv)
+
+# Check conditions to set data directory
+if (mountpoint -q /srv || is_link /srv) && [ "$available_space" -ge "$EXTERNAL_MINIMUM_SPACE" ]; then
+  print_log "All conditions met. Setting data_directory to $EXTERNAL_DB_DATADIR."
+  show_data_dir Before
+  pg_conftool "$PG_VERSION" "$PG_CLUSTER_NAME" set data_directory "$EXTERNAL_DB_DATADIR" || true
+  show_data_dir After
+else
+  print_log "Conditions not met for setting data_directory. pg_conftool command not executed."
+
+  if ! mountpoint -q /srv && ! is_link /srv; then
+    print_log "- /srv is neither a mountpoint nor a symbolic link."
+  fi
+
+  if [ "$available_space" -lt "$EXTERNAL_MINIMUM_SPACE" ]; then
+    print_log "- Available space on /srv ($available_space KB) is less than required minimum ($EXTERNAL_MINIMUM_SPACE KB)."
+  fi
+fi
+
+if [ -e "/etc/postgresql/$PG_VERSION/$PG_CLUSTER_NAME/postgresql.conf" ]; then
+  # For ubios migrate to debbox
+  pg_conftool "$PG_VERSION" "$PG_CLUSTER_NAME" set ssl "off" || true
+  pg_conftool "$PG_VERSION" "$PG_CLUSTER_NAME" remove ssl || true
+  pg_conftool "$PG_VERSION" "$PG_CLUSTER_NAME" remove ssl_cert_file || true
+  pg_conftool "$PG_VERSION" "$PG_CLUSTER_NAME" remove ssl_key_file || true
+fi
+
+print_log "Script completed."
+
+exit 0

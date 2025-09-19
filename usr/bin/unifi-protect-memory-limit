@@ -1,0 +1,20 @@
+#!/bin/bash
+
+MEMORY_512_MB=512
+MEMORY_2048_MB=2048
+
+# set max old space size to quarter of system memory
+osmem_kb=$( grep MemTotal /proc/meminfo | awk '{print $2}' )
+quarter_osmem_kb=$(( osmem_kb / 4 ))
+to_mb=$(( quarter_osmem_kb / 1024 ))
+mem_alignment=$(( to_mb / 4 * 4 ))
+
+# 512 MB is the minimum
+# 2GB is the maximum
+if [[ "$mem_alignment" -gt "$MEMORY_2048_MB" ]]; then
+  echo "$MEMORY_2048_MB"
+elif [[ "$mem_alignment" -lt "$MEMORY_512_MB" ]]; then
+  echo "$MEMORY_512_MB"
+else
+  echo "$mem_alignment"
+fi

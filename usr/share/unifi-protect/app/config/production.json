@@ -1,0 +1,21 @@
+{
+  "env": "production",
+  "ironclad": {
+    "accessId": "b30c676d-0e21-4985-9ff5-e9b501d05c78",
+    "host": "https://pactsafe.io",
+    "active": {
+      "smartDetection": {
+        "link": "https://vault.pactsafe.io/s/b30c676d-0e21-4985-9ff5-e9b501d05c78/legal.html?g=46424#contract-rkemandw2",
+        "cid": "278802",
+        "vid": "671944009abcc0f5fb55d420",
+        "groupKey": "8ac444f30c421edb0d9f2c6a1677630d"
+      },
+      "aiReporting": {
+        "link": "https://vault.pactsafe.io/s/b30c676d-0e21-4985-9ff5-e9b501d05c78/legal.html?g=46424#contract-rkemandw2",
+        "cid": "278802",
+        "vid": "671944009abcc0f5fb55d420",
+        "groupKey": "8ac444f30c421edb0d9f2c6a1677630d-copy"
+      }
+    }
+  }
+}

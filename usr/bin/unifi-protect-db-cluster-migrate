@@ -1,0 +1,189 @@
+#!/bin/sh
+
+set -e
+
+USER=postgres
+GROUP=postgres
+
+DB_CLUSTER_MIGRATED_FILE=/srv/.db-cluster-migrated.ctl
+
+PG_VERSION=14
+PG_CLUSTER_NAME=protect
+PG_CLUSTER_PORT=5433
+PG_CLUSTER_ENV="/etc/postgresql/$PG_VERSION/$PG_CLUSTER_NAME"
+
+INTERNAL_DB_ROOT=/data/postgresql
+INTERNAL_DB_DIR="$INTERNAL_DB_ROOT/$PG_VERSION/$PG_CLUSTER_NAME"
+INTERNAL_DB_DATADIR="$INTERNAL_DB_DIR/data"
+INTERNAL_DB_CONFDIR="$INTERNAL_DB_DIR/conf"
+
+EXTERNAL_DB_ROOT=/srv/postgresql
+EXTERNAL_DB_DIR="$EXTERNAL_DB_ROOT/$PG_VERSION/$PG_CLUSTER_NAME"
+EXTERNAL_DB_DATADIR="$EXTERNAL_DB_DIR/data"
+EXTERNAL_DB_CONFDIR="$EXTERNAL_DB_DIR/conf"
+
+EXTERNAL_MINIMUM_SPACE=54683238 # kibibyte = 52.15 GiB = 56 GB
+
+LOG_FILE="/var/log/postgresql/postgresql-$PG_VERSION-$PG_CLUSTER_NAME-migrate.log"
+
+is_link() {
+  [ -L "$1" ] && [ -e "$1" ] && return
+  false
+}
+
+get_disk_space() {
+  df "$1" -k | tail -n 1 | awk '{printf $2}'
+}
+
+# Keep database in build-in SSD, no need to migration
+if is_link $INTERNAL_DB_ROOT || mountpoint -q /ssd1; then
+  exit 0
+fi
+
+print_log() {
+  local msg="$1"
+  local logFile=${2:-"$LOG_FILE"}
+
+  echo "[$(date -u +'%F %T %z')] - unifi-protect-db-cluster-migrate - $msg" >> $logFile || true
+}
+
+# Workaround for unknown reason after FW upgrade, conf_dir might be missing or empty sometimes...
+regenerate_pg_conf() {
+  local cluster_dir=$1
+  local conf_dir=$cluster_dir/conf
+  local data_dir=$cluster_dir/data
+
+  print_log "Protect cluster config was missing or incomplete..."
+
+  print_log "ls -al $conf_dir"
+  ls -al $conf_dir >> $LOG_FILE 2>&1 || true
+
+  print_log "Re-generating Protect cluster conf..."
+
+  # remove the dead or wrong link or empty conf directory
+  rm -rf $PG_CLUSTER_ENV
+  rm -rf $conf_dir
+
+  # re-create the Protect cluster
+  pg_createcluster -d /tmp/.protect_conf_workaround_$$ -p $PG_CLUSTER_PORT $PG_VERSION $PG_CLUSTER_NAME -- --auth=trust --auth-local=trust >> $LOG_FILE 2>&1
+
+  print_log "Copying the generated conf..."
+
+  mv $PG_CLUSTER_ENV $conf_dir
+
+  # update postgres cluster structure
+  ln -snf $conf_dir $PG_CLUSTER_ENV
+
+  print_log "Updating Protect cluster data_directory"
+  pg_conftool $PG_VERSION $PG_CLUSTER_NAME set data_directory $data_dir
+
+  print_log "Checking Protect cluster conf..."
+
+  print_log "ls -al $PG_CLUSTER_ENV"
+  ls -al $PG_CLUSTER_ENV >> $LOG_FILE 2>&1 || true
+
+  print_log "ls -al $conf_dir"
+  ls -al $conf_dir >> $LOG_FILE 2>&1 || true
+
+  print_log "pg_conftool $PG_VERSION $PG_CLUSTER_NAME get data_directory"
+  pg_conftool $PG_VERSION $PG_CLUSTER_NAME get data_directory >> $LOG_FILE 2>&1 || true
+
+  print_log "Cleaning temporary data..."
+
+  rm -rf /tmp/.protect_conf_workaround_$$ || true
+
+  print_log "Applied the Protect cluster config re-generate procedure..."
+}
+
+create_srv_condition() {
+  SYSTEMD_CONDITION=/lib/systemd/system/postgresql-cluster@$PG_VERSION-protect.service.d/condition-srv.conf
+  if [ ! -f $SYSTEMD_CONDITION ]; then
+    printf "[Unit]\nConditionPathExists=/srv\n" > $SYSTEMD_CONDITION
+    systemctl daemon-reload
+  fi
+}
+
+if (mountpoint -q /srv || is_link /srv) && [ $(get_disk_space /srv) -ge $EXTERNAL_MINIMUM_SPACE ]; then
+  if [ "$(pg_conftool -s 14 protect show data_directory 2>/dev/null)" = $EXTERNAL_DB_DATADIR ]; then
+    if [ ! -f "${DB_CLUSTER_MIGRATED_FILE}" ]; then
+      # Already migrated
+      touch $DB_CLUSTER_MIGRATED_FILE
+    fi
+  fi
+
+  if [ ! -d $EXTERNAL_DB_DIR ]; then
+    # Create external directory
+    mkdir -p $EXTERNAL_DB_DIR
+    chown $USER:$GROUP $EXTERNAL_DB_DIR
+  fi
+
+  if [ -d $INTERNAL_DB_DIR ] && [ ! -f "${DB_CLUSTER_MIGRATED_FILE}" ]; then
+    print_log "Move DB to the external storage"
+    print_log "rsync -a $INTERNAL_DB_DIR/ $EXTERNAL_DB_DIR/"
+    rsync -a $INTERNAL_DB_DIR/ $EXTERNAL_DB_DIR/
+
+    print_log "Create a db cluster migrated control file: $DB_CLUSTER_MIGRATED_FILE"
+    touch $DB_CLUSTER_MIGRATED_FILE
+  fi
+
+  if [ -e "$EXTERNAL_DB_DIR"/.configured ]; then
+    if [ ! -d $EXTERNAL_DB_CONFDIR ] || [ "$(find $EXTERNAL_DB_CONFDIR -maxdepth 1 -mindepth 1 -type f | wc -l)" -eq 0 ]; then
+      if [ -d $EXTERNAL_DB_DATADIR ] && [ ! -z "$(ls -A $EXTERNAL_DB_DATADIR)" ]; then
+        regenerate_pg_conf $EXTERNAL_DB_DIR
+      else
+        print_log "Protect pg cluster incomplete..."
+
+        print_log "ls -al $EXTERNAL_DB_DIR $EXTERNAL_DB_CONFDIR $EXTERNAL_DB_DATADIR"
+        ls -al $EXTERNAL_DB_DIR $EXTERNAL_DB_CONFDIR $EXTERNAL_DB_DATADIR >> $LOG_FILE 2>&1 || true
+
+        print_log "cleanup the protect pg cluster..."
+        rm -rf $EXTERNAL_DB_DIR
+      fi
+    fi
+  fi
+
+  # Update DB config
+  INTERNAL_DB_DIR_ESCAPED=$(echo $INTERNAL_DB_DIR | sed 's/\//\\\//g')
+  EXTERNAL_DB_DIR_ESCAPED=$(echo $EXTERNAL_DB_DIR | sed 's/\//\\\//g')
+  sed -i "s/DIR=$INTERNAL_DB_DIR_ESCAPED/DIR=$EXTERNAL_DB_DIR_ESCAPED/g" "/etc/default/postgresql/$PG_VERSION-$PG_CLUSTER_NAME"
+
+  # ubios migrate to debbox or others missing incomplete cluster protect setup...
+  if [ -e "$EXTERNAL_DB_DIR/.configured" ] && [ -d $EXTERNAL_DB_DATADIR ] && [ -d $EXTERNAL_DB_CONFDIR ]; then
+    link_to="$(readlink -z -n $PG_CLUSTER_ENV || true)"
+
+    if [ -z "$link_to" ] || [ "$link_to" != "$EXTERNAL_DB_CONFDIR" ]; then
+      mkdir -p "/etc/postgresql/$PG_VERSION/"
+      chown $USER:$GROUP "/etc/postgresql/$PG_VERSION/"
+
+      print_log "recreate the pg-cluster-protect symbolic... original point to: '$link_to'"
+      print_log "ln -snf $EXTERNAL_DB_CONFDIR $PG_CLUSTER_ENV"
+
+      ln -snf $EXTERNAL_DB_CONFDIR $PG_CLUSTER_ENV
+
+      ls -al $EXTERNAL_DB_CONFDIR >> $LOG_FILE 2>&1 || true
+    fi
+
+    if [ ! -f "$DB_CLUSTER_MIGRATED_FILE" ]; then
+      touch $DB_CLUSTER_MIGRATED_FILE
+    fi
+  fi
+  create_srv_condition || true
+else
+  if [ -e "$INTERNAL_DB_DIR"/.configured ]; then
+    if [ ! -d $INTERNAL_DB_CONFDIR ] || [ "$(find $INTERNAL_DB_CONFDIR -maxdepth 1 -mindepth 1 -type f | wc -l)" -eq 0 ]; then
+      if [ -d $INTERNAL_DB_DATADIR ] && [ ! -z "$(ls -A $INTERNAL_DB_DATADIR)" ]; then
+        regenerate_pg_conf $INTERNAL_DB_DIR
+      else
+        print_log "Protect pg cluster incomplete..."
+
+        print_log "ls -al $INTERNAL_DB_DIR $INTERNAL_DB_CONFDIR $INTERNAL_DB_DATADIR"
+        ls -al $INTERNAL_DB_DIR $INTERNAL_DB_CONFDIR $INTERNAL_DB_DATADIR >> $LOG_FILE 2>&1 || true
+
+        print_log "cleanup the protect pg cluster..."
+        rm -rf $INTERNAL_DB_DIR
+      fi
+    fi
+  fi
+fi
+
+exit 0

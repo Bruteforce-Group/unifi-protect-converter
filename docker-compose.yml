@@ -1,0 +1,13 @@
+version: '3.8'
+
+services:
+  unifi-convert:
+    build: .
+    volumes:
+      - /private/tmp/protect:/private/tmp/protect
+      - ./output:/output
+    environment:
+      - TZ=Australia/Brisbane
+      - UFP_MAX_OLD_SPACE=2048
+    tty: true
+    stdin_open: true

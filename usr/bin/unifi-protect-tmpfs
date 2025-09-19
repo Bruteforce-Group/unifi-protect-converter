@@ -1,0 +1,26 @@
+#!/bin/bash
+
+TMPFS_256_MB=256M
+TMPFS_512_MB=512M
+TMPFS_1_GB=1024M
+TMPFS_4_GB=4096M
+
+os_sysid=$( ubnt-tools id | grep 'board.sysid' | awk -F'=' '{print $2}' )
+
+case $os_sysid in
+  0xeccc)
+    echo "$TMPFS_256_MB"
+    ;;
+  0xe970|0xa69a|0xea15|0xea13|0xea2a|0xea2c)
+    echo "$TMPFS_512_MB"
+    ;;
+  0xea32|0xea16|0xea1a|0xea20)
+    echo "$TMPFS_1_GB"
+    ;;
+  0xea3f)
+    echo "$TMPFS_4_GB"
+    ;;
+  *)
+    echo "$TMPFS_256_MB"
+    ;;
+esac

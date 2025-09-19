@@ -1,0 +1,592 @@
+{
+  "ports": {
+    "ump": 7449,
+    "http": 7080,
+    "https": 7443,
+    "rtsp": 7447,
+    "rtsps": 7441,
+    "rtmp": 1935,
+    "devicesWss": 7442,
+    "cameraHttps": 7444,
+    "liveWs": 7445,
+    "liveWss": 7446,
+    "tcpStreams": 7451,
+    "playback": 7450,
+    "emsCLI": 7440,
+    "emsJsonCLI": 1112,
+    "emsLiveFLV": 7550,
+    "emsLiveFLVs": 7552,
+    "cameraEvents": 7551,
+    "stacking": 7600,
+    "tcpBridge": 7888,
+    "aiFeatureConsole": 7086,
+    "ucore": 11081,
+    "discoveryClient": 0,
+    "accessHttp": 12080
+  },
+  "clean": false,
+  "cvPath": "./cv",
+  "dataPath": "./data",
+  "fileStoragePath": "./storage",
+  "videoPath": "./video",
+  "exportsPath": "./exports",
+  "configPath": "/usr/share/unifi-protect/app/config",
+  "uploadsPath": "./uploads",
+  "downloadsPath": "./downloads",
+  "migrationsPath": "./migrations",
+  "migrationConflicts": {
+    "enableAutoResolver": true
+  },
+  "restartLoopStatePath": "./restart-loop.state",
+  "backupPaths": [
+    "/etc/unifi-protect/backups",
+    "/srv/unifi-protect/backups",
+    "/sdcard/unifi-protect/backups"
+  ],
+  "internalJsonDb": "/etc/unifi-protect/jsonDb",
+  "stopReasonFile": "./.stop_note",
+  "dbBackupPath": "./dbBackups",
+  "dbRestoreFlag": "./dbBackups/.restore",
+  "enableMissingRecordingClientReporting": true,
+  "recordingFilesCleanupFlag": "./dbBackups/.cleanup",
+  "networkInterfaces": [
+    "br0",
+    "eth0",
+    "eth1",
+    "eth2",
+    "eno3",
+    "en04",
+    "en3",
+    "en0",
+    "en1",
+    "en2",
+    "enp0s1",
+    "enp0s2",
+    "lag0"
+  ],
+  "socketsPath": "/var/run/unifi-protect",
+  "lastSeenInterval": 10000,
+  "hardwareApi": "http://127.0.0.1/api/hardware",
+  "firmwareUpdatesUrl": {
+    "prod": "https://fw-update.ui.com/api/firmware-latest",
+    "stg": "https://fw-update.stg.ui.com/api/firmware-latest"
+  },
+  "networkAppApi": "http://127.0.0.1:8081/v2/api",
+  "ubvFileSize": 1024,
+  "skipFirmwareUpdate": false,
+  "ssl": {
+    "crt": "./data/unifi-protect.crt",
+    "key": "./data/unifi-protect.key",
+    "deviceCrt": "./data/devices.crt",
+    "deviceKey": "./data/devices.key"
+  },
+  "ws": {
+    "maxIncomingMessageBytes": 2000000
+  },
+  "postgres": {
+    "host": "/var/run/postgresql",
+    "port": 5433,
+    "dbName": "unifi-protect",
+    "username": "unifi-protect",
+    "password": null,
+    "pool": {
+      "max": 10,
+      "min": 2,
+      "idle": 10000
+    },
+    "dbCorruptedFlag": "./data/.corrupted-db",
+    "dbRecoveredFlag": "./data/.db-recovered",
+    "backupSchedule": "0 3 * * *"
+  },
+  "logs": {
+    "enableConsole": false,
+    "paths": {
+      "internal": "/data/unifi-protect/logs",
+      "external": "/srv/unifi-protect/logs"
+    },
+    "levels": {
+      "default": "verbose"
+    },
+    "maxFiles": 3,
+    "maxFileSize": 5242880
+  },
+  "metrics": {
+    "enabled": false,
+    "enableNodeMetrics": false,
+    "enableHandoffMetrics": false,
+    "enableHandoffMetricsNames": [],
+    "enableCameraIPCMetrics": false,
+    "enableCameraIPCMetricsNames": [],
+    "enableTraceMetrics": false,
+    "enableTraceMetricsNames": [],
+    "enableDecalMetrics": false,
+    "enableDecalMetricsNames": []
+  },
+  "overrides": "/etc/unifi-protect/config.json",
+  "stats": {
+    "interval": 60000,
+    "ttl": 86400000
+  },
+  "ms": {
+    "pingIntervalMs": 60000,
+    "pongTimeoutMs": 60000,
+    "logs": {
+      "dir": "../ms/logs"
+    },
+    "addon": {
+      "logs": {
+        "maxFileSize": 5000000,
+        "maxFileCount": 5,
+        "logLevel": 4
+      }
+    },
+    "transcoder": {
+      "logs": {
+        "logLevel": 1
+      }
+    },
+    "msp": {
+      "enabled": true,
+      "host": "127.0.0.1",
+      "ports": {
+        "tcp": 7701,
+        "ws": 7702,
+        "http": 7703
+      },
+      "modes": {
+        "playback": {
+          "enabled": true,
+          "target": [
+            "ws",
+            "tcp"
+          ]
+        },
+        "timelapse": {
+          "enabled": true,
+          "target": [
+            "ws",
+            "tcp"
+          ]
+        },
+        "videoExport": {
+          "enabled": true,
+          "target": [
+            "http",
+            "tcp"
+          ]
+        },
+        "videoPrepare": {
+          "enabled": true,
+          "target": [
+            "http"
+          ]
+        },
+        "thumbnail": {
+          "enabled": false,
+          "target": [
+            "http",
+            "tcp"
+          ]
+        },
+        "listFragments": {
+          "enabled": false,
+          "target": [
+            "http",
+            "tcp"
+          ]
+        }
+      },
+      "tcpConnectionPool": {
+        "maxConnections": 10,
+        "disablePooling": true
+      }
+    }
+  },
+  "deviceVersions": {
+    "viewer": {
+      "product": "unifi-protect-box",
+      "version": "^1",
+      "downgradeDisabled": true
+    },
+    "camera": {
+      "product": "uvc",
+      "version": "^5",
+      "intermediateVersions": {
+        "cv22": [
+          "4.74.106"
+        ],
+        "cv25z": [
+          "4.74.1",
+          "4.74.106"
+        ],
+        "cv2x": [
+          "4.51.13",
+          "4.74.106"
+        ],
+        "s2l": [
+          "4.51.4",
+          "4.74.106"
+        ],
+        "s2lm": [
+          "4.74.106"
+        ],
+        "s5l": [
+          "4.15.67",
+          "4.74.106"
+        ],
+        "sav530q": [
+          "4.57.34",
+          "4.74.106"
+        ],
+        "sav532q": [
+          "4.51.4",
+          "4.74.106"
+        ],
+        "sav539g": [
+          "4.74.106",
+          "4.74.151"
+        ],
+        "sav837gw": [
+          "4.74.106"
+        ]
+      },
+      "platforms": {
+        "a5s": "~4.40.8",
+        "s2l": "~4.75.62",
+        "s2lm": "~4.75.62",
+        "sav532q": "~4.75.62"
+      },
+      "updates": [
+        {
+          "product": "UVC-G6-PRO-BULLET",
+          "platform": "sav539gp",
+          "version": "^5.1",
+          "overrideProduct": "uvc"
+        },
+        {
+          "product": "UVC-G6-PRO-BULLET-BLACK",
+          "platform": "sav539gp",
+          "version": "^5.1",
+          "overrideProduct": "uvc"
+        },
+        {
+          "product": "UVC-AI-PTZ-PRECISION",
+          "platform": "cv25z",
+          "version": "^5.1",
+          "overrideProduct": "uvc"
+        },
+        {
+          "product": "UVC-AI-PTZ-PRECISION-WHITE",
+          "platform": "cv25z",
+          "version": "^5.1",
+          "overrideProduct": "uvc"
+        },
+        {
+          "product": "UVC-G6-PRO-360",
+          "platform": "sav539gp",
+          "version": "^5.1",
+          "overrideProduct": "uvc"
+        },
+        {
+          "product": "UVC-G6-PRO-360-BLACK",
+          "platform": "sav539gp",
+          "version": "^5.1",
+          "overrideProduct": "uvc"
+        }
+      ]
+    },
+    "light": {
+      "product": "floodlight",
+      "version": "^1"
+    },
+    "sensor": {
+      "updates": [
+        {
+          "product": "MULTI_SENSOR",
+          "platform": "efr32mg",
+          "version": "^1"
+        },
+        {
+          "product": "USL-ENVIRONMENTAL",
+          "platform": "st50h",
+          "version": "^1"
+        },
+        {
+          "product": "USL-ENTRY",
+          "platform": "st50h",
+          "version": "^1"
+        },
+        {
+          "product": "USL-MOTION",
+          "platform": "st50h",
+          "version": "^0"
+        },
+        {
+          "product": "USL-SMOKE",
+          "platform": "st50h",
+          "version": "^0"
+        },
+        {
+          "product": "USL-GLASSBREAK",
+          "platform": "st50h",
+          "version": "^0"
+        }
+      ]
+    },
+    "doorlock": {
+      "product": "retrofit_doorlock",
+      "version": "^1"
+    },
+    "chime": {
+      "product": "up-chime",
+      "version": "^1",
+      "downgradeDisabled": true,
+      "intermediateVersions": {
+        "esp32": [
+          "1.4.0"
+        ]
+      }
+    },
+    "aiprocessor": {
+      "product": "AI-Key",
+      "version": "~2.0.2",
+      "downgradeDisabled": true,
+      "intermediateUpdate": true
+    },
+    "aiport": {
+      "product": "ai-port",
+      "version": "^5.0.6"
+    },
+    "linkstation": {
+      "product": "UP-Sense-Link",
+      "version": "^1"
+    },
+    "speaker": {
+      "product": "up-horn-speaker",
+      "version": "^1"
+    },
+    "siren": {
+      "product": "up-siren-poe",
+      "version": "^1"
+    },
+    "reader": {
+      "updates": [
+        {
+          "product": "UA-PRO",
+          "platform": "android",
+          "version": "^2.14.21"
+        },
+        {
+          "product": "UA-G2-PRO",
+          "platform": "android",
+          "version": "^1.10.32"
+        },
+        {
+          "product": "UA-G3-PRO",
+          "platform": "android",
+          "version": "^1.10.30"
+        },
+        {
+          "product": "UA-PORTAL",
+          "platform": "android",
+          "version": "^1.7.28"
+        },
+        {
+          "product": "UA-G3-INTERCOM",
+          "platform": "android",
+          "version": "^1.7.29"
+        },
+        {
+          "product": "UA-INTERCOM-VIEWER",
+          "platform": "android",
+          "version": "^0.0.36"
+        },
+        {
+          "product": "UDA-LITE",
+          "platform": "openwrt",
+          "version": "^3.15.4"
+        },
+        {
+          "product": "UA-G2-MINI",
+          "platform": "openwrt",
+          "version": "^3.15.4"
+        },
+        {
+          "product": "UA-G3-FLEX",
+          "platform": "esp32",
+          "version": "^1.4.3"
+        }
+      ]
+    },
+    "hub": {
+      "updates": [
+        {
+          "product": "UAH",
+          "platform": "openwrt",
+          "version": "^4.9.14"
+        },
+        {
+          "product": "UA-HUB-GATE",
+          "platform": "openwrt",
+          "version": "^2.3.15"
+        },
+        {
+          "product": "UA-HUB-DOOR-MINI",
+          "platform": "esp32",
+          "version": "^1.2.7"
+        },
+        {
+          "product": "UEL",
+          "platform": "openwrt",
+          "version": "^4.9.14"
+        },
+        {
+          "product": "UAHE",
+          "platform": "openwrt",
+          "version": "^5.7.17"
+        },
+        {
+          "product": "UA-ULTRA",
+          "platform": "esp32",
+          "version": "^1.7.4"
+        }
+      ]
+    }
+  },
+  "health": {
+    "interval": 300000,
+    "connectionsInterval": 60000,
+    "storeEntitiesInterval": 60000,
+    "analyzeLargestStoreEntitiesInterval": 60000,
+    "enableEventBackpressure": true,
+    "dbStatisticsInterval": 14400000
+  },
+  "sentry": {
+    "enabled": true,
+    "enabledForCompanyEmployees": true,
+    "env": "release",
+    "dsn": "https://f2e4d08968d349eebfd9536f0cef2d1a@o21767.ingest.sentry.io/5679511",
+    "organization": "ubiquiti-networks",
+    "project": "protect-be"
+  },
+  "workersPoolsLimits": {
+    "DnsResolve": 0,
+    "Global": 1,
+    "Misc": 1,
+    "Read": 4,
+    "Serve": 90,
+    "Transcode": 8,
+    "Write": 24
+  },
+  "fingerprint": {
+    "fetchInterval": 3600000,
+    "databaseUrl": "https://static.ui.com/fingerprint/ui/public.json",
+    "iconsUrl": "https://static.ui.com/fingerprint/ui/icons/",
+    "guidDiscoveryBaseUrl": "https://static.ui.com/fingerprint/ui/guids/"
+  },
+  "streamSharing": {
+    "prefix": "https://monitor.ui.com/",
+    "expiresIn": 86400000,
+    "maxStreams": 1
+  },
+  "eventsRetentionDays": {
+    "critical": 90,
+    "admin": 90,
+    "ring": 90,
+    "motion": 90,
+    "smart": 90,
+    "iot": 90
+  },
+  "analytics": {
+    "crashReportUri": "https://crash-report-service.svc.ui.com",
+    "traceUri": "https://trace.svc.ui.com/traces",
+    "sendAnalytics": true,
+    "computerVisionReport": {
+      "prd": "https://protect-cv-report.svc.ui.com",
+      "stg": "https://protect-cv-report.stg.svc.ui.com",
+      "dev": "https://protect-cv-report.dev.svc.ui.com"
+    }
+  },
+  "weather": {
+    "weatherApiUrl": {
+      "prd": "https://weather-api.svc.ui.com",
+      "stg": "https://weather-api.stg.svc.ui.com",
+      "dev": "https://weather-api.dev.svc.ui.com"
+    }
+  },
+  "enableSsh": false,
+  "enableRestartLoopProtection": true,
+  "npiModelIntegration": false,
+  "ironclad": {
+    "accessId": "47ad61df-e852-4650-8ebe-c16ca24ecf4c",
+    "host": "https://pactsafe.io",
+    "active": {
+      "smartDetection": {
+        "link": "https://vault.pactsafe.io/s/b30c676d-0e21-4985-9ff5-e9b501d05c78/legal.html?g=46424#contract-rkemandw2",
+        "cid": "278802",
+        "vid": "671944009abcc0f5fb55d420",
+        "groupKey": "group-hj54gvbw3-copy-rzhs7yl6j"
+      },
+      "aiReporting": {
+        "link": "https://vault.pactsafe.io/s/b30c676d-0e21-4985-9ff5-e9b501d05c78/legal.html?g=46424#contract-rkemandw2",
+        "cid": "278802",
+        "vid": "671944009abcc0f5fb55d420",
+        "groupKey": "group-hj54gvbw3-copy"
+      }
+    }
+  },
+  "GRPC": {
+    "server": {
+      "host": "localhost",
+      "port": 7005
+    },
+    "MSR": {
+      "host": "localhost",
+      "port": 7700,
+      "maxReceiveMessageLength": 8388608
+    },
+    "MSP": {
+      "host": "localhost",
+      "port": 7707,
+      "maxReceiveMessageLength": 8388608
+    },
+    "homekit": {
+      "host": "localhost",
+      "port": 7801,
+      "maxReceiveMessageLength": 8388608
+    },
+    "ucore": {
+      "host": "localhost",
+      "port": 11051,
+      "maxReceiveMessageLength": 8388608
+    }
+  },
+  "ulpApi": "http://127.0.0.1:9080/api/v2",
+  "ulpWs": "ws://127.0.0.1:9080/api/v2/ws/notification",
+  "recognition": {
+    "autoFaceRegrouping": {
+      "all": {
+        "enabled": false,
+        "cron": "0 * * * *",
+        "limit": 1000,
+        "hours": 18
+      },
+      "small": {
+        "enabled": false,
+        "cron": "5,10,15,20,25,30,35,40,45,50,55 * * * *",
+        "limit": 1000,
+        "hours": 3
+      }
+    }
+  },
+  "supportAccessApplicationMigrations": false,
+  "tts": {
+    "textSynthesizeURLs": {
+      "prd": "https://unifi-tts.svc.ui.com",
+      "stg": "https://unifi-tts.stg.svc.ui.com",
+      "dev": "https://unifi-tts.dev.svc.ui.com"
+    }
+  },
+  "srcPath": "/usr/share/unifi-protect/app",
+  "firmwarePath": "/usr/share/unifi-protect/app/firmware"
+}

@@ -1,0 +1,74 @@
+#!/bin/sh
+
+set -e
+
+CLUSTER_PORT=5433
+INTERNAL_DB_ROOT=/data/postgresql
+INTERNAL_DB_DIR=/data/postgresql/14/protect
+EXTERNAL_DATADIR=/srv/postgresql/14/protect/data
+
+PG_CLUSTER_NAME=protect
+PG_VERSION=14
+LOG_FILE="/var/log/postgresql/postgresql-$PG_VERSION-$PG_CLUSTER_NAME-dev.log"
+
+is_link() {
+  [ -L "$1" ] && [ -e "$1" ] && return
+  false
+}
+
+print_log() {
+  local msg="$1"
+  local logFile=${2:-"$LOG_FILE"}
+
+  echo "[$(date -u +'%F %T %z')] - unifi-protect-db-cluster-cleanup - $msg" >> $logFile || true
+}
+
+wait_cluster_online() {
+  for i in $(seq 1 20); do
+    if pg_isready -p $CLUSTER_PORT -q; then
+      return
+    fi
+    sleep 5
+  done
+  false
+}
+
+OLD_DB_TMP_COPYING=/srv/.old_protect_db_tmp_copying
+OLD_DB_TMP_REMOVING=/srv/.old_protect_db_tmp_removing
+OLD_DB_TMP_LINKED=/srv/.old_protect_db_tmp_linked
+
+drop_old_cluster() {
+  pg_dropcluster 9.6 protect || true
+  rm -rf /etc/postgresql/9.6/protect \
+         /srv/postgresql/9.6/protect \
+         /data/postgresql/9.6/protect \
+         /var/run/postgresql/9.6-protect.pg_stat_tmp
+
+  rm -f $OLD_DB_TMP_COPYING $OLD_DB_TMP_REMOVING $OLD_DB_TMP_LINKED
+}
+
+# Wait while DB cluster is ready
+if ! wait_cluster_online; then
+  exit 1
+fi
+
+drop_old_cluster
+
+# Keep database in build-in SSD, no need to cleanup
+if is_link $INTERNAL_DB_ROOT || mountpoint -q /ssd1; then
+  exit 0
+fi
+
+if [ "$(pg_conftool -s 14 protect show data_directory)" = $EXTERNAL_DATADIR ]; then
+  # Remove this migration service
+  # rm -f /etc/systemd/system/postgresql-cluster@protect.service.d/cluster-migrate.conf
+  # systemctl --system daemon-reload >/dev/null || true
+  if [ -d $INTERNAL_DB_DIR ]; then
+    # rm -rf "${INTERNAL_DB_DIR:?}"/{,.[!.],..?}*
+    print_log "Cleaning out the old internal DB directory: $INTERNAL_DB_DIR"
+    find $INTERNAL_DB_DIR/ -mindepth 1 -maxdepth 1 -exec rm -r -- {} +
+  fi
+
+  # cleanup workaround for conf directoy was missing
+  rm -rf /tmp/.protect_conf_workaround_* || true
+fi
